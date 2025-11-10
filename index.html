@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Лео в космосе</title>
   <!-- Версию можно менять тут, чтобы пробить кэш -->
-  <meta name="build" content="2025-11-10-7">
+  <meta name="build" content="2025-11-10-8">
 
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -84,6 +84,7 @@
       const [showComets, setShowComets] = useState(true);
       const [revealedComets, setRevealedComets] = useState([]); // Массив найденных комет {x, y}
       const [shouldAutoShowRoute, setShouldAutoShowRoute] = useState(false); // Флаг для автопоказа пути после салюта
+      const [loadingAudio, setLoadingAudio] = useState(false); // Флаг загрузки звуков
 
       const routeIntervalRef = useRef(null);
       const audioCache = useRef({});
@@ -140,7 +141,8 @@
           cometCorrect: 'Правильно! Комета була тут!',
           excellent: 'Чудово!',
           cometIncorrect: 'Невірно, спробуй ще.',
-          commandSpeed: 'Швидкість команд:'
+          commandSpeed: 'Швидкість команд:',
+          loading: 'Завантаження...'
         },
         en: {
           title: 'Leo in Space',
@@ -178,7 +180,8 @@
           cometCorrect: 'Correct! The comet was here!',
           excellent: 'Excellent!',
           cometIncorrect: 'Incorrect, try again.',
-          commandSpeed: 'Command Speed:'
+          commandSpeed: 'Command Speed:',
+          loading: 'Loading...'
         },
         ru: {
           title: 'Лео в космосе',
@@ -216,7 +219,8 @@
           cometCorrect: 'Правильно! Комета была здесь!',
           excellent: 'Отлично!',
           cometIncorrect: 'Неверно, попробуй ещё.',
-          commandSpeed: 'Скорость команд:'
+          commandSpeed: 'Скорость команд:',
+          loading: 'Загрузка...'
         },
         es: {
           title: 'Leo en el espacio',
@@ -254,25 +258,65 @@
           cometCorrect: '¡Correcto! ¡El cometa estaba aquí!',
           excellent: '¡Excelente!',
           cometIncorrect: 'Incorrecto, inténtalo de nuevo.',
-          commandSpeed: 'Velocidad de comandos:'
+          commandSpeed: 'Velocidad de comandos:',
+          loading: 'Cargando...'
         }
       };
 
       const t = translations[language];
+
+      // === Функция предзагрузки аудио с ожиданием ===
+      const preloadAudio = (path) => {
+        return new Promise((resolve, reject) => {
+          if (audioCache.current[path]) {
+            resolve(audioCache.current[path]);
+            return;
+          }
+          
+          const audio = new Audio(path);
+          audio.preload = 'auto';
+          
+          const onCanPlay = () => {
+            audio.removeEventListener('canplaythrough', onCanPlay);
+            audio.removeEventListener('error', onError);
+            audioCache.current[path] = audio;
+            resolve(audio);
+          };
+          
+          const onError = (e) => {
+            audio.removeEventListener('canplaythrough', onCanPlay);
+            audio.removeEventListener('error', onError);
+            console.warn(`Failed to preload audio: ${path}`, e);
+            reject(e);
+          };
+          
+          audio.addEventListener('canplaythrough', onCanPlay);
+          audio.addEventListener('error', onError);
+          audio.load();
+        });
+      };
 
       // === Воспроизведение звуков ===
       // Языковые звуки: up/down/left/right/start — из ./sounds/{lang}/
       const playLangSound = async (soundName) => {
         const soundPath = withV(`./sounds/${language}/${soundName}.mp3`);
         try {
-          if (!audioCache.current[soundPath]) {
-            const audio = new Audio(soundPath);
+          // Используем закэшированный аудио или создаем новый
+          let audio = audioCache.current[soundPath];
+          if (!audio) {
+            audio = new Audio(soundPath);
             audio.preload = 'auto';
             audioCache.current[soundPath] = audio;
+            await new Promise((resolve) => {
+              audio.addEventListener('canplaythrough', resolve, { once: true });
+              audio.load();
+            });
           }
-          const audio = audioCache.current[soundPath];
-          audio.currentTime = 0;
-          const playPromise = audio.play();
+          
+          // Создаем клон для одновременного воспроизведения
+          const audioClone = audio.cloneNode();
+          audioClone.volume = audio.volume;
+          const playPromise = audioClone.play();
           if (playPromise !== undefined) {
             playPromise.catch(() => speak(t[soundName] || soundName));
           }
@@ -482,44 +526,29 @@
 
       const startGame = () => setScreen('confirm');
 
-      const confirmSettings = () => {
+      const confirmSettings = async () => {
+        setLoadingAudio(true);
         generateRoute();
 
-        // Предзагрузка: языковые + общий click
-        const langSounds = ['start', 'up', 'down', 'left', 'right'];
-        langSounds.forEach(sound => {
-          const path = withV(`./sounds/${language}/${sound}.mp3`);
-          if (!audioCache.current[path]) {
-            const audio = new Audio(path);
-            audio.preload = 'auto';
-            audio.load();
-            audioCache.current[path] = audio;
-          }
-        });
-        const clickPath = withV(`./sounds/click.mp3`);
-        if (!audioCache.current[clickPath]) {
-          const audio = new Audio(clickPath);
-          audio.preload = 'auto';
-          audio.load();
-          audioCache.current[clickPath] = audio;
-        }
-        // Предзагрузка: телепорт и фанфары
-        const teleportPath = withV(`./sounds/teleport.mp3`);
-        if (!audioCache.current[teleportPath]) {
-          const audio = new Audio(teleportPath);
-          audio.preload = 'auto';
-          audio.load();
-          audioCache.current[teleportPath] = audio;
-        }
-        const fireworksPath = withV(`./sounds/fireworks.mp3`);
-        if (!audioCache.current[fireworksPath]) {
-          const audio = new Audio(fireworksPath);
-          audio.preload = 'auto';
-          audio.load();
-          audioCache.current[fireworksPath] = audio;
+        // Предзагрузка всех звуков с ожиданием
+        try {
+          const langSounds = ['start', 'up', 'down', 'left', 'right'];
+          const soundPaths = [
+            ...langSounds.map(sound => withV(`./sounds/${language}/${sound}.mp3`)),
+            withV(`./sounds/click.mp3`),
+            withV(`./sounds/teleport.mp3`),
+            withV(`./sounds/fireworks.mp3`)
+          ];
+          
+          // Загружаем все звуки параллельно
+          await Promise.all(soundPaths.map(path => 
+            preloadAudio(path).catch(e => console.warn('Audio preload failed:', path))
+          ));
+        } catch (e) {
+          console.warn('Some audio files failed to preload, continuing anyway');
         }
 
-
+        setLoadingAudio(false);
         setScreen('countdown');
         setCountdown(3);
         setGameStarted(true);
@@ -1173,8 +1202,18 @@
                     <p className="text-sm sm:text-base md:text-lg"><strong>{t.startPosition}</strong> {settings.startPosition === 'center' ? t.center : t.random}</p>
                   </div>
                   <div className="flex flex-col sm:flex-row gap-3 sm:gap-4">
-                    <button onClick={() => setScreen('settings')} className="flex-1 py-3 sm:py-4 bg-gray-400 text-white text-base sm:text-lg md:text-xl font-bold rounded-xl shadow-lg hover:bg-gray-500 transition-all border-2 border-gray-500">{t.backToSettings}</button>
-                    <button onClick={confirmSettings} className="flex-1 py-3 sm:py-4 bg-gradient-to-r from-green-500 to-green-600 text-white text-base sm:text-lg md:text-xl font-bold rounded-xl shadow-lg hover:shadow-xl transform hover:scale-105 transition-all border-2 border-green-700">{t.confirm}</button>
+                    <button onClick={() => setScreen('settings')} disabled={loadingAudio} className="flex-1 py-3 sm:py-4 bg-gray-400 text-white text-base sm:text-lg md:text-xl font-bold rounded-xl shadow-lg hover:bg-gray-500 transition-all border-2 border-gray-500 disabled:opacity-50">{t.backToSettings}</button>
+                    <button onClick={confirmSettings} disabled={loadingAudio} className="flex-1 py-3 sm:py-4 bg-gradient-to-r from-green-500 to-green-600 text-white text-base sm:text-lg md:text-xl font-bold rounded-xl shadow-lg hover:shadow-xl transform hover:scale-105 transition-all border-2 border-green-700 disabled:opacity-50 disabled:transform-none">
+                      {loadingAudio ? (
+                        <span className="flex items-center justify-center gap-2">
+                          <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                          {t.loading || 'Завантаження...'}
+                        </span>
+                      ) : t.confirm}
+                    </button>
                   </div>
                 </div>
               </div>
