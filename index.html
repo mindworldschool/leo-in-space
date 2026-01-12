@@ -88,7 +88,26 @@
       const [portalsPositions, setPortalsPositions] = useState([]);
       const [cometsPositions, setCometsPositions] = useState([]);
       const [message, setMessage] = useState('');
-      const [language, setLanguage] = useState('ru');
+      // === АВТОМАТИЧЕСКОЕ ОПРЕДЕЛЕНИЕ ЯЗЫКА ИЗ ССЫЛКИ ===
+      // 1. Читаем параметр ?lang=...
+      const urlParams = new URLSearchParams(window.location.search);
+      const urlLang = urlParams.get('lang');
+
+      // 2. Определяем стартовый язык: Ссылка -> Браузер -> 'ru'
+      const getInitialLanguage = () => {
+        if (urlLang && ['en', 'ua', 'ru', 'es'].includes(urlLang)) {
+          return urlLang; // Ссылка главнее всего
+        }
+        // Если в ссылке нет, пробуем угадать по браузеру
+        const browserLang = (navigator.language || "").toLowerCase();
+        if (browserLang.startsWith('ua') || browserLang.startsWith('uk')) return 'ua';
+        if (browserLang.startsWith('en')) return 'en';
+        if (browserLang.startsWith('es')) return 'es';
+        return 'ru'; // По умолчанию
+      };
+
+      const [language, setLanguage] = useState(getInitialLanguage());
+      // ==================================================
       const [gameStarted, setGameStarted] = useState(false);
       const [cometGuessMode, setCometGuessMode] = useState(false);
       const [cometGuess, setCometGuess] = useState(null);
